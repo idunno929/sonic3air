@@ -35,16 +35,58 @@ jobs:
         working-directory: Oxygen/sonic3air/build/_emscripten
         run: cmake --build build --parallel 2
 
-      - name: Assemble initial web-engine artifact
+      - name: Package game files for the web build
+        working-directory: Oxygen/sonic3air
+        run: |
+          python3 "$EMSDK/upstream/emscripten/tools/file_packager.py" build/_emscripten/dist/sonic3air.data \
+            --js-output=build/_emscripten/dist/loader.js \
+            --preload ___internal@/sonic3air/___internal \
+                      config.json@/sonic3air/config.json \
+                      data@/sonic3air/data \
+                      oxygenproject.json@/sonic3air/oxygenproject.json \
+                      scripts@/sonic3air/scripts \
+            --use-preload-cache
+
+      - name: Assemble complete web distribution
         run: |
           mkdir -p dist
-          cp Oxygen/sonic3air/build/_emscripten/dist/sonic3air_web.js dist/
-          cp Oxygen/sonic3air/build/_emscripten/dist/sonic3air_web.wasm dist/
-          cp Oxygen/sonic3air/build/_emscripten/dist/sonic3air_web.html dist/index.html
+          cp -a Oxygen/sonic3air/build/_emscripten/dist/. dist/
+          cp dist/sonic3air_web.html dist/index.html
+          cp Oxygen/sonic3air/build/_emscripten/dist/worker.js dist/worker.js
+          python3 - <<'PY'
+          from pathlib import Path
+          html = Path("dist/index.html")
+          source = html.read_text()
+          old = """\t//Uncomment the service worker below for actual releases to force files to be cached so you can play offline.
+          \t//Leave it commented when testing because otherwise when you refresh the page you'll still be getting cached data.
+          \t/*if('serviceWorker' in navigator) {
+          \t\tnavigator.serviceWorker.register('worker.js');
+          \t};*/"""
+          new = """\t// Cache the game files after the first successful online load for later offline launches.
+          \tif ('serviceWorker' in navigator) {
+          \t\tnavigator.serviceWorker.register('./worker.js').catch(function(error) {
+          \t\t\tconsole.warn('Offline cache registration failed:', error);
+          \t\t});
+          \t}"""
+          if old not in source:
+              raise SystemExit("Could not find the service-worker registration block in the upstream launcher")
+          html.write_text(source.replace(old, new, 1))
+          worker = Path("dist/worker.js")
+          worker_text = worker.read_text()
+          worker_text = worker_text.replace(
+              "'sonic3air_web.wasm',",
+              "'sonic3air_web.wasm',\n\t'sonic3air.data',"
+          )
+          worker_text = worker_text.replace(
+              "'sonic3air_web.html',",
+              "'index.html',\n\t'sonic3air_web.html',"
+          )
+          worker.write_text(worker_text)
+          PY
 
-      - name: Upload web-engine artifact
+      - name: Upload complete Chromebook web artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sonic3air-web-engine
+          name: sonic3air-chromebook-web
           path: dist/
           if-no-files-found: error
