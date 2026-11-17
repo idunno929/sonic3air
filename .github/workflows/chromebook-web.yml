@@ -1,0 +1,50 @@
+name: Chromebook Web Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - chromebook-offline
+    paths:
+      - 'Oxygen/**'
+      - 'framework/**'
+      - 'librmx/**'
+      - '.github/workflows/chromebook-web.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-web:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 4.0.23
+          actions-cache-folder: 'emsdk-cache'
+
+      - name: Configure WebAssembly build
+        working-directory: Oxygen/sonic3air/build/_emscripten
+        run: emcmake cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Compile Sonic 3 A.I.R. WebAssembly
+        working-directory: Oxygen/sonic3air/build/_emscripten
+        run: cmake --build build --parallel 2
+
+      - name: Assemble initial web-engine artifact
+        run: |
+          mkdir -p dist
+          cp Oxygen/sonic3air/build/_emscripten/dist/sonic3air_web.js dist/
+          cp Oxygen/sonic3air/build/_emscripten/dist/sonic3air_web.wasm dist/
+          cp Oxygen/sonic3air/build/_emscripten/dist/sonic3air_web.html dist/index.html
+
+      - name: Upload web-engine artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonic3air-web-engine
+          path: dist/
+          if-no-files-found: error
