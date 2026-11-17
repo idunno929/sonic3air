@@ -57,20 +57,21 @@ jobs:
           from pathlib import Path
           html = Path("dist/index.html")
           source = html.read_text()
-          old = """\t//Uncomment the service worker below for actual releases to force files to be cached so you can play offline.
-          \t//Leave it commented when testing because otherwise when you refresh the page you'll still be getting cached data.
-          \t/*if('serviceWorker' in navigator) {
-          \t\tnavigator.serviceWorker.register('worker.js');
-          \t};*/"""
-          new = """\t// Cache the game files after the first successful online load for later offline launches.
-          \tif ('serviceWorker' in navigator) {
-          \t\tnavigator.serviceWorker.register('./worker.js').catch(function(error) {
-          \t\t\tconsole.warn('Offline cache registration failed:', error);
-          \t\t});
-          \t}"""
-          if old not in source:
-              raise SystemExit("Could not find the service-worker registration block in the upstream launcher")
-          html.write_text(source.replace(old, new, 1))
+          start = source.find("//Uncomment the service worker below")
+          if start < 0:
+              raise SystemExit("Could not find the service-worker section in the upstream launcher")
+          end_marker = "};*/"
+          end = source.find(end_marker, start)
+          if end < 0:
+              raise SystemExit("Could not find the end of the service-worker section")
+          end += len(end_marker)
+          new = """// Cache the game files after the first successful online load for later offline launches.
+          if ('serviceWorker' in navigator) {
+              navigator.serviceWorker.register('./worker.js').catch(function(error) {
+                  console.warn('Offline cache registration failed:', error);
+              });
+          }"""
+          html.write_text(source[:start] + new + source[end:])
           worker = Path("dist/worker.js")
           worker_text = worker.read_text()
           worker_text = worker_text.replace(
