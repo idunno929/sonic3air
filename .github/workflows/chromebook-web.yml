@@ -35,7 +35,7 @@ jobs:
         working-directory: Oxygen/sonic3air/build/_emscripten
         run: cmake --build build --parallel 2
 
-      - name: Package game files for the web build
+      - name: Package game files for the single-file build
         working-directory: Oxygen/sonic3air
         run: |
           python3 "$EMSDK/upstream/emscripten/tools/file_packager.py" build/_emscripten/dist/sonic3air.data \
@@ -44,50 +44,63 @@ jobs:
                       config.json@/sonic3air/config.json \
                       data@/sonic3air/data \
                       oxygenproject.json@/sonic3air/oxygenproject.json \
-                      scripts@/sonic3air/scripts \
-            --use-preload-cache
+                      scripts@/sonic3air/scripts
 
-      - name: Assemble complete web distribution
+      - name: Assemble standalone offline HTML
         run: |
-          mkdir -p dist
-          cp -a Oxygen/sonic3air/build/_emscripten/dist/. dist/
-          cp dist/sonic3air_web.html dist/index.html
-          cp Oxygen/sonic3air/build/_emscripten/dist/worker.js dist/worker.js
           python3 - <<'PY'
           from pathlib import Path
-          html = Path("dist/index.html")
-          source = html.read_text()
-          start = source.find("//Uncomment the service worker below")
-          if start < 0:
-              raise SystemExit("Could not find the service-worker section in the upstream launcher")
-          end_marker = "};*/"
-          end = source.find(end_marker, start)
-          if end < 0:
-              raise SystemExit("Could not find the end of the service-worker section")
-          end += len(end_marker)
-          new = """// Cache the game files after the first successful online load for later offline launches.
-          if ('serviceWorker' in navigator) {
-              navigator.serviceWorker.register('./worker.js').catch(function(error) {
-                  console.warn('Offline cache registration failed:', error);
-              });
-          }"""
-          html.write_text(source[:start] + new + source[end:])
-          worker = Path("dist/worker.js")
-          worker_text = worker.read_text()
-          worker_text = worker_text.replace(
-              "'sonic3air_web.wasm',",
-              "'sonic3air_web.wasm',\n\t'sonic3air.data',"
+          import base64
+
+          dist = Path("Oxygen/sonic3air/build/_emscripten/dist")
+          html = (dist / "sonic3air_web.html").read_text()
+          loader = (dist / "loader.js").read_text()
+          main_js = (dist / "sonic3air_web.js").read_text()
+          package = base64.b64encode((dist / "sonic3air.data").read_bytes()).decode("ascii")
+
+          # The game-data loader normally fetches sonic3air.data. Supply it directly
+          # from this HTML file instead, which also works from a file:// URL.
+          old_loader = """\t//Load the loader after the rest of the stuff, because otherwise we get a console error?
+          \tvar loader=document.createElement('script');
+          \tloader.setAttribute('async', '');
+          \tloader.setAttribute('src', 'loader.js');
+          \tdocument.body.appendChild(loader);
+          \tModule['calledRun'] = true; //We got here from pre-run, so loader needs to know that."""
+          new_loader = """\t// The preload loader is already embedded above the main engine script.
+          \tModule['calledRun'] = true; //We got here from pre-run, so loader needs to know that."""
+          if old_loader not in html:
+              raise SystemExit("Could not find upstream dynamic loader block")
+          html = html.replace(old_loader, new_loader)
+
+          # Remove web-only links and service-worker registration.
+          html = html.replace('<link rel="manifest" href="manifest.json">', '')
+          html = html.replace('<link rel="apple-touch-icon" sizes="256x256" href="icon.png">', '')
+
+          marker = '<script async src=sonic3air_web.js></script>'
+          if marker not in html:
+              raise SystemExit("Could not find the main engine script tag")
+
+          embedded = (
+              '<script>\n'
+              'Module["getPreloadedPackage"] = function(name, size) {\n'
+              '  var binary = atob("' + package + '");\n'
+              '  var bytes = new Uint8Array(binary.length);\n'
+              '  for (var i = 0; i < binary.length; ++i) bytes[i] = binary.charCodeAt(i);\n'
+              '  return bytes.buffer;\n'
+              '};\n'
+              '</script>\n'
+              '<script>\n' + loader + '\n</script>\n'
+              '<script>\n' + main_js.replace('</script', '<\\/script') + '\n</script>'
           )
-          worker_text = worker_text.replace(
-              "'sonic3air_web.html',",
-              "'index.html',\n\t'sonic3air_web.html',"
-          )
-          worker.write_text(worker_text)
+          html = html.replace(marker, embedded)
+          output = Path("dist")
+          output.mkdir(exist_ok=True)
+          (output / "Sonic 3 A.I.R. Offline.html").write_text(html)
           PY
 
-      - name: Upload complete Chromebook web artifact
+      - name: Upload standalone offline HTML
         uses: actions/upload-artifact@v4
         with:
-          name: sonic3air-chromebook-web
-          path: dist/
+          name: sonic3air-single-file-offline
+          path: dist/Sonic 3 A.I.R. Offline.html
           if-no-files-found: error
